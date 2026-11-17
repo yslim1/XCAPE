@@ -1,0 +1,107 @@
+output_path: /path/to/output/                           # required; output directory, created if missing
+
+# Optional integer seed for reproducibility. When set, the global RNGs
+# (Python random, NumPy, Torch) are seeded before generation/mutation/MQA so
+# runs are repeatable. Omit (or set null) for fresh, non-reproducible entropy.
+# Note: GPU MLIP relaxation may still be non-deterministic across runs.
+# seed: 0
+
+input_setting:
+  # Exactly one of xml_path or cif_path must be set.
+  # Prefer a direct file path for reproducibility.
+  # A directory path is still allowed only when it contains exactly one matching file.
+  xml_path: /path/to/card.xml
+# cif_path: /path/to/ref.cif
+
+# Distance-constraint settings
+calc_dist_tol: True                                     # default: True; if False, use covalent-radius-based heuristic tolerances instead of MQA MD
+dist_tol_scale: 0.75                                    # optional (omit for no scaling); scale factor applied to generated distance tolerances
+dist_tol_limit: 1.2                                     # default: 0; minimum distance tolerance in angstrom
+# Optional user-defined distance constraints.
+# If provided, XCAPE will use these values instead of generating them automatically.
+# distance_constraint:
+#   Li-O: 1.80
+#   Li-Li: 2.20
+#   O-O: 2.40
+
+MLIP_setting:                                           # currently SevenNet only
+  model: 7net-omni                                      # SevenNet model name
+  modal: mpa                                            # optional modal/channel
+  backend: flash                                        # optional; flash | cueq | unset
+
+XRD_setting:
+  wave_length: CuKa                                     # required; a key in utils/xrd_utils.WAVELENGTHS (e.g. CuKa, MoKa)
+  two_theta_tol: 0.3                                    # default: 0.0; peak-pairing tolerance in degrees, must be >= 0
+  # Optional explicit comparison window. If omitted, XCAPE uses the
+  # reference peak range expanded by two_theta_tol.
+  two_theta_range: [1.0, 90.0]
+  normalize: sum                                        # default: null; one of null, max, sum, scale; applied to both reference and calculated intensities
+
+optimizer:
+  type: batch                                           # required; sequential (ASE FIRE) or batch (torch-sim FIRE, GPU)
+  ftol: 0.02                                            # default: 0.05; force convergence tolerance (eV/A)
+  max_short_step_per_atom: 5                            # default: 1; steps/atom for the initial distance-violation screening stage
+  max_step_per_atom: 20                                 # default: 100; steps/atom for the full relaxation stage
+  fix_symmetry: True                                    # required; preserve space-group symmetry during relaxation
+  max_memory_padding: 0.8                               # default: 0.8; (batch only) fraction of the probed GPU memory limit the torch-sim autobatcher may use (lower = more headroom)
+
+structure:
+  # Search control
+  generation: 50                                        # required; number of generations, positive integer
+  population: 50                                        # required; structures per generation, positive integer
+  random_ratio: 0.1                                     # required; fraction generated randomly each generation (rest via mutation), 0.0 ~ 1.0
+  early_stopping_threshold: 0.002                       # default: 0.005; stop if any candidate has r_factor below this value, must be >= 0
+  # Optional reporting gate. When True, the lowest-energy converged trials of each
+  # generation are relaxed a second time from their generated structure with
+  # optimizer.fix_symmetry disabled. Results go to CONTCARs_no_sym and non-sym.log
+  # and never enter the candidate pool, so they do not become parents -- but they
+  # are still checked against early_stopping_threshold, since a matching pattern
+  # is a solution whether or not symmetry was held fixed.
+  add_no_symmetry_relax: False                          # default: False
+  add_no_symmetry_relax_ratio: 0.3                      # default: 0.3; fraction of the population re-relaxed (rounded down, minimum 1), 0.0 ~ 1.0
+
+  mutation:
+    selection_method:
+      parent_metric: energy                             # default: energy; options: energy, r_factor, wasserstein
+      weighted_parent_ratio: 0.8                        # default: 0.8; probability of weighted parent sampling; otherwise choose a random parent
+      temperature: 1.0                                  # default: 1.0; 0 selects only the best parent. Recommended: 1.0 decaying to min_temperature 0.5
+      temperature_decay: 0.9                            # default: 0.9; per-generation multiplicative decay of temperature
+      min_temperature: 0.5                              # default: 0.5; floor for the decayed temperature
+    max_mutation_attempts: 100                          # default: 100; retry budget across mutation trials per offspring
+    mutation_ratios:                                    # all seven ratios required together when set; must sum to 1.0
+      swap_same_mult_ratio: 0.25                        # swap sites with the same multiplicity
+      split_site_ratio: 0.1                             # split one site into multiple sites
+      merge_site_ratio: 0.1                             # merge multiple sites into one site
+      swap_diff_elem_ratio: 0.15                        # swap sites occupied by different elements
+      site_reconfig_ratio: 0.2                          # reconfigure Wyckoff-site assignments
+      resample_pos_ratio: 0.1                           # resample one site position
+      multi_resample_pos_ratio: 0.1                     # resample multiple site positions
+      max_attempts: 100                                 # default: 100; retry budget inside one mutation move
+
+  # Candidate selection
+  best_metric:
+    energy:
+      enabled: True
+      delta: 0.1                                        # default: 0.1 (eV/atom)
+    r_factor:
+      enabled: True
+      delta: 0.2                                        # default: 0.05
+    wasserstein:
+      enabled: True
+      delta: 0.5                                        # default: 0.5
+
+  # Candidate-pool control via deduplication
+  dedup:
+    keep_max: 25                                        # optional (omit or null to disable capping); max candidates kept after deduplication, must be > 0 when set
+    energy: 0.005                                       # default: 0.005 (eV/atom)
+    r_factor: 0.05                                      # default: 0.01
+    wasserstein: 0.5                                    # default: 0.01; Wasserstein distance is usually larger than R-factor difference
+    mix_ratios:                                         # fractions of keep_max filled per metric (sequential, no replacement); all three keys required together, must sum to 1.0; the largest bucket absorbs the rounding remainder (ties: r_factor > energy > wasserstein)
+      r_factor: 0.5                                     # default: 0.4; 0.5/0.5/0.0 selects half by RF and half by energy, as used in the paper
+      energy: 0.5                                       # default: 0.4
+      wasserstein: 0.0                                  # default: 0.2
+    structure_matcher:
+      ltol: 0.2                                         # default: 0.2
+      stol: 0.3                                         # default: 0.3
+      angle_tol: 5                                      # default: 5
+      primitive_cell: False                             # default: False

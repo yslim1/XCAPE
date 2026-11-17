@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xcape"
+dynamic = ["version"]
+description = "XCAPE: XRD-Constrained Accelerated Prediction Engine"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.12"
+authors = [
+    { name = "Yunsung Lim", email = "yunsunglim@snu.ac.kr" },
+]
+dependencies = [
+    "pymatgen>=2025.10.7",
+    "ase>=3.27.0",
+    "pyxtal==1.1.2",
+    "psutil>=7.2.2",
+    "pyyaml>=6.0.3",
+    "numpy>=2.4.2",
+    "scipy>=1.15",
+    "torch>=2.10.0",
+    "sevenn[torchsim]>=0.12.1",
+    # torch_sim's FixSymmetry needs moyopy, which only the "symmetry" extra pulls in.
+    "torch-sim-atomistic[symmetry]>=0.6.0",
+]
+
+[project.scripts]
+xcape = "xcape.main:cli"
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8",
+    "pytest-mock>=3",
+]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.dynamic]
+version = { attr = "xcape.__version__" }
+
+# Regular packages only (every xcape subpackage has an __init__.py), so stray
+# directories under xcape/ are never picked up and shipped as packages.
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["xcape*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
